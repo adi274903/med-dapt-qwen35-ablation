@@ -1,0 +1,39 @@
+{
+  "_variant_why": [
+    "THE DAPT RUN -- not a grid. One arm, trained long, saved, resumable. Point OVERRIDES at this file in the notebook preamble (OVERRIDES = 'configs/dapt.json') and nothing else has to change: the ablation's config.json is left alone, so the two runs can live in the same repo and the same Drive tree without mixing.",
+    "RECIPE (the 'optimal settings' call, and why each piece): DoRA rather than LoRA, r=32 alpha=64 -- DoRA matches or beats LoRA at low rank and the rank sweep was deferred, so 32 is the smallest rank with headroom above the 21.6M no-saturate point. LR 1e-4 with warmup 6% and a cosine half-cycle over the full run -- the highest value the probe confirmed stable; the literature's advice is the highest stable LR, and underfitting is the live risk at this exposure, so do not lower it. All seven projections adapted. dropout 0.0.",
+    "THE ONE UNUSUAL SETTING: embedding_lr_ratio 1.0, i.e. NO decoupled embedding LR. The tied embed_tokens/lm_head pair is 0.636B of the measured 0.679B trainable parameters (93.6% of everything that moves) and it is exactly the piece the base recipe trains at 1e-5 -- 10x BELOW the adapter. Unsloth's 0.1x ratio is an SFT convention (there the embeddings are already aligned and you must not disturb them); in domain-adaptive pretraining the token distribution is the thing that has to move. Biderman et al. 2024 name full training of the input/output embedding pair as explicitly unexplored (arXiv:2405.09673, App. A.1), so this is the setting with the least prior art and the largest share of the gradients. If the losses diverge early, this ratio is the first knob to pull back to 0.3.",
+    "BUDGET: wall_h_per_arm 40.0 h is the ONE number to argue with. At the G4's measured 5.03 s/step that is 28,372 steps / 929,693,696 tokens / 0.2137 tokens per text parameter -- about 20x the ablation arm's 45.6M, and still below the 2-3 orders that published CPT uses, so read it as a real but still data-starved run. It costs ~348 Colab units of the 1000 balance and about 5 sessions at the 9.5 h cap.",
+    "SESSIONS: session_hours is set ABOVE wall_h_per_arm on purpose. The driver only starts an arm if the whole arm fits inside session_hours, so a 40 h arm with session_hours 9.5 would never start at all. The real boundary is Colab killing the runtime at ~9.5 h mid-arm; because save_models is on, a checkpoint exists on Drive, and re-running step 09 next session resumes from it instead of restarting. Never leave save_models false on this variant: without a checkpoint a killed session is a lost run.",
+    "CHECKPOINTS: modules_to_save writes the full embed_tokens + lm_head once (the pair is tied, so ~1.4 GB, not the ~2.5 GB two independent copies would cost), and save_total_limit 2 keeps the newest two -- budget ~2.8 GB of Drive. save_steps equals eval_steps, so every save is also a scored point."
+  ],
+  "saving": {
+    "save_models": true,
+    "save_arms": ["DAPT"],
+    "_save_why": "ON, and it must stay on: this run spans ~5 sessions, and the checkpoint is the only thing that lets a killed session resume instead of restart. Cost is ~1.4 GB per checkpoint (embed_tokens + lm_head written once because the pair is tied) with save_total_limit 2, so ~2.8 GB of Drive. Save ON is also what makes load_best_model_at_end meaningful -- with 28k steps and 6 evals there is a real best point to select."
+  },
+  "budget": {
+    "wall_h_per_arm": 40.0,
+    "session_hours": 45.0,
+    "total_budget_hours": 50.0,
+    "sec_per_step": 5.03,
+    "_wall_h_why": "40.0 h = the whole DAPT arm. This is the knob: 20 h = 460M tokens / 0.106 tok/param / ~174 units / ~2.5 sessions, if you want a cheaper first look; 100 h = 2.35B tokens / 0.54 tok/param / ~871 units, essentially the entire month, for the largest run the balance can buy at this model size. sec_per_step is the G4's MEASURED 5.03 (step 08 on this box), not the A100's 6.8 -- re-run the probe if you change boxes, because a wrong s/step does not error, it silently rescales the token budget.",
+    "_total_why": "Ceiling for this single arm with room to spare, so the driver's grid-budget guard never fires mid-run: 40 h arm + margin. The binding limit is the 1000-unit balance (~114.8 GPU-hours total) and the 9.5 h session, not this number -- session_hours is deliberately above wall_h_per_arm because the driver refuses to start an arm that cannot fit inside one session."
+  },
+  "grid": [
+    {
+      "id": "DAPT",
+      "desc": "the DAPT run: DoRA r=32 a=64 LR 1e-4, tied embed/head pair trained at FULL LR (ratio 1.0), saved + resumable",
+      "overrides": { "embedding_lr_ratio": 1.0 }
+    }
+  ],
+  "_grid_why": [
+    "A grid of one. This file exists to run the recipe once, for real, and keep the weights -- the ablation's job was to rank recipes, and it cannot rank them at 0.0105 tok/param, so the useful next move is to spend the budget on a single long run of the best-supported recipe instead of five short ones.",
+    "The arm inherits every baseline knob (DoRA, r=32, alpha=64, LR 1e-4, all seven projections, dropout 0.0, seq 2048, effective batch 16, seed 3407) and changes exactly one thing: embedding_lr_ratio 0.1 -> 1.0. One-arm grid, one delta, so the run's identity is unambiguous when the numbers are written up.",
+    "To go back to the ablation: drop the OVERRIDES line in the preamble and step 09 runs config.json's five arms again. The two runs keep separate folders (this one gets root_suffix-free root plus its own config hash), so nothing is overwritten either way."
+  ],
+  "trainer": {
+    "save_total_limit": 2,
+    "logging_steps": 10
+  }
+}
