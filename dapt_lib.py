@@ -650,24 +650,33 @@ def build_model(run, cfg):
             " WITHOUT the tie is the failure this knob exists to avoid." % e)
 
     # ---- hard assertions: these are the silent-failure modes ----
+    # PEFT rewrites `modules_to_save` IN PLACE, and on a TIED base it also
+    # populates `modules_to_tie`, so the stored value is not the value we
+    # passed: a leaf key comes back as the full dotted path PEFT resolved
+    # (Qwen3.5 nests its text tower, so `embed_tokens` becomes
+    # `model.language_model.embed_tokens`) and a module PEFT folds into the
+    # tie moves to `modules_to_tie` and disappears from here. Compare leaf
+    # NAMES, report the difference, and let the trainability checks below --
+    # which look at the actual tensors -- decide what really happened.
+    def _leaf(names):
+        return set(k.split(".")[-1] for k in names if k)
+
     tied_names = set()
     for aname, pc in model.peft_config.items():
         assert pc.use_dora == cfg["use_dora"], "adapter %s: use_dora mismatch" % aname
         assert pc.r == cfg["r"], "adapter %s: rank mismatch" % aname
         got = set(pc.modules_to_save or [])
         tied_names |= set(getattr(pc, "modules_to_tie", None) or [])
-        if tying and tied_names:
-            # PEFT moves the tied partner OUT of modules_to_save into
-            # modules_to_tie, so `got` is expected to be short by exactly the
-            # entries it moved. Anything else is a silent misconfiguration.
-            expect = set(want_ms) - set(k.split(".")[-2] if k.endswith(".weight")
-                                        else k.split(".")[-1] for k in tied_names)
-            assert got == expect, (
-                "adapter %s: modules_to_save=%s, wanted %s (minus tied %s)"
-                % (aname, got, want_ms, sorted(tied_names)))
-        else:
-            assert got == set(want_ms), (
-                "adapter %s: modules_to_save=%s, wanted %s" % (aname, got, want_ms))
+        absent = _leaf(want_ms) - _leaf(got)
+        if got != set(want_ms) or absent:
+            print("  modules_to_save: requested %s -> PEFT stored %s%s"
+                  % (want_ms, sorted(got),
+                     ("  (moved to modules_to_tie: %s)" % sorted(tied_names))
+                     if tied_names else
+                     ("  (absent: %s)" % sorted(absent)) if absent else ""))
+        assert not (_leaf(got) - _leaf(want_ms)), (
+            "adapter %s: PEFT stored modules we never asked for: %s (requested %s)"
+            % (aname, sorted(_leaf(got) - _leaf(want_ms)), want_ms))
     assert not getattr(model, "is_loaded_in_4bit", False)
     if tying and not tied_names:
         print("  WARNING: lora.ensure_weight_tying was set but PEFT reported no"
@@ -700,8 +709,13 @@ def build_model(run, cfg):
             assert w_head is not None and w_head.requires_grad, (
                 "lm_head not trainable -- the frozen original won")
             assert w_emb is not w_head, (
-                "modules_to_save did not untie embed_tokens/lm_head -- PEFT changed"
-                " behaviour, check the version")
+                "modules_to_save did not untie embed_tokens/lm_head: the head still"
+                " shares the embedding's tensor%s. PEFT is keeping the base tie"
+                " (tie_word_embeddings=True) instead of deep-copying both, so there"
+                " is ONE trainable tensor, not two. Either set"
+                " lora.ensure_weight_tying=true to declare that as the intent, or"
+                " drop lm_head from modules_to_save."
+                % (" (modules_to_tie=%s)" % sorted(tied_names) if tied_names else ""))
             print("  embed_tokens/lm_head: trainable copies, TIE BROKEN (expected)")
 
     else:
