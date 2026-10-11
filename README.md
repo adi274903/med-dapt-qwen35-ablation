@@ -4,10 +4,10 @@ A **config-driven** DAPT (domain-adaptive pretraining) + DoRA ablation study for
 `Qwen/Qwen3.5-4B-Base` on a medical corpus. Runs in Colab, writes its results to
 Drive, and resumes across sessions.
 
-The point of the layout: **every number lives in a JSON file, every behaviour
-lives in `dapt_lib.py`, and the notebook is drivers and prose only.** Changing an
-experiment means adding a small JSON file — never editing the notebook, never
-editing `base.json`.
+The point of the layout: **every number lives in `config.json`, every behaviour
+lives in `dapt_lib.py`, every step of the run lives in `steps/*.py`, and the
+notebook is one line per step.** Changing an experiment means editing JSON — never
+the notebook, and never the modules.
 
 ## Run it
 
@@ -17,25 +17,58 @@ Open the notebook in Colab:
 https://colab.research.google.com/github/adi274903/med-dapt-qwen35-ablation/blob/main/unsloth_Med_Qwen3_5_4B_dapt_ABLATION.ipynb
 ```
 
-Cell 4 clones this repo (once per session, `--depth 1`) and puts it on
-`sys.path`, so `import dapt_lib` resolves to the code here. Re-running the cell
-pulls the latest commit instead of re-cloning.
+The notebook's **preamble cell** is the only cell that holds real code — it is
+what fetches the rest. It clones this repo (once per session, `--depth 1`), puts
+it on `sys.path`, and defines
 
-**Code comes from GitHub; results go to Drive.** `ablation_root` in
-`configs/base.json` points at the Drive tree. That is deliberate: the session is
-disposable, the results tree is not. Each arm writes `<root>/<arm_id>/status.json`,
-and the driver skips arms whose `status.json` says `done`, so a dead session
-costs one cell re-run, not a re-run of the grid.
+```python
+step('05_verify_env')      # == %run -i steps/05_verify_env.py, in this namespace
+```
+
+Every other cell is one `step(...)` call, so the code the notebook runs is code
+you can read, diff and version here. Re-running the preamble cell pulls the latest
+commit instead of re-cloning, and each step re-reads its file, so a mid-session
+`git pull` takes effect on the next cell.
+
+**Code comes from GitHub; results go to Drive.** `ablation_root` in `config.json`
+points at the Drive tree. That is deliberate: the session is disposable, the
+results tree is not. Each arm writes `<root>/<arm_id>/status.json`, and the driver
+skips arms whose `status.json` says `done`, so a dead session costs one cell
+re-run, not a re-run of the grid.
 
 ## What's here
 
 | path | role |
 |---|---|
+| `config.json` | every knob, with `_why` strings as the comments JSON cannot carry |
 | `dapt_lib.py` | all logic: budget math, model build, data mix, trainer, `probe`, `run_grid`, keep/throw ruler, `phase0`, adapter checks |
-| `configs/base.json` | every knob, with `_why` strings as the comments JSON cannot carry |
+| `steps/*.py` | the run itself, one file per notebook cell (table below) |
 | `configs/ctx4096.json` | worked override example (adds a `B4k` arm at 4096 tokens) |
-| `unsloth_Med_Qwen3_5_4B_dapt_ABLATION.ipynb` | the run: 13 sections, one-line calls into `dapt_lib` |
+| `unsloth_Med_Qwen3_5_4B_dapt_ABLATION.ipynb` | the driver: preamble + one `step(...)` line per module |
 | `selftest/` | stub `torch`/`datasets`/`unsloth` tree + harness that executes the *whole* module off-GPU |
+
+### The steps
+
+| step | file | what it does |
+|---|---|---|
+| — | preamble (in the notebook) | clone/pull this repo, `sys.path`, define `step()` |
+| 01 | `steps/01_install.py` | pin the runtime: unsloth first, then the transformers v5 window, then the G4 wheels |
+| 02 | `steps/02_colab_setup.py` | HF token, Drive mount, fresh compile cache |
+| 03 | `steps/03_causal_conv1d.py` | the prebuilt GDN wheel from Drive (`--no-deps`) |
+| 04 | `steps/04_open_run.py` | `run = open_run('config.json')` — the session state |
+| 05 | `steps/05_verify_env.py` | the env gates: bf16, cut-cross-entropy, no QLoRA |
+| 06 | `steps/06_budget.py` | the cost table for this grid |
+| 07 | `steps/07_data.py` | build the interleaved mix + per-source holdout |
+| 08 | `steps/08_probe.py` | measure s/step on this box (~5 min) |
+| 09 | `steps/09_run_grid.py` | run the pending arms |
+| 10 | `steps/10_tensorboard.py` | TensorBoard over `run.root` |
+| 11 | `steps/11_ruler.py` | keep/throw ranking |
+| 12 | `steps/12_verify_adapters.py` | validate the winner's adapters |
+| 13 | `steps/13_phase0.py` | the does-DAPT-help curve (optional) |
+
+Each file's docstring carries that step's "why". Steps 05-13 assume `run` exists
+(step 04); the Colab-only steps (01-03) are plain `subprocess` pip installs so they
+work as files instead of needing `%pip` magics.
 
 ## The study
 
@@ -66,8 +99,9 @@ Two model facts drive the design and are asserted in `build_model()`, not assume
 
 ## Adding a variant
 
-Do **not** edit `configs/base.json`. Add `configs/<name>.json` with only the keys
-you change, and pass its name as `OVERRIDES` in the bootstrap cell:
+For a one-off experiment, do **not** edit `config.json`: add `configs/<name>.json`
+with only the keys you change, and pass its name as `OVERRIDES` in the preamble
+cell:
 
 ```jsonc
 // configs/my-variant.json
@@ -105,7 +139,7 @@ STUB_PEFT_FORWARD=1 python3 selftest/test_stub_run.py   # wrapper forwards .weig
 STUB_PEFT_FORWARD=0 python3 selftest/test_stub_run.py   # older/different PEFT naming
 ```
 
-**Before spending units:** run `probe()` (notebook cell 8 or `dapt_lib.probe`).
+**Before spending units:** run `probe()` (step 08 or `dapt_lib.probe`).
 `budget.sec_per_step` ships as a **placeholder (12.0)** and a wrong value does not
 error — it silently rescales the token budget, which is the one thing this design
 must not do.

@@ -1,8 +1,9 @@
 """
 dapt_lib -- medical DAPT / DoRA ablation engine for Qwen3.5-4B-Base.
 
-Every number lives in a JSON config (configs/base.json); every piece of logic
-lives here.  The notebook only calls these functions.
+Every number lives in config.json (repo root); every piece of logic lives here.
+The notebook only calls these functions, and every one of its cells is one line:
+`step('<file>')`, which %runs steps/<file>.py from this repo.
 
 WHY IT IS SHAPED THIS WAY
   * No heavy import at module level.  `import dapt_lib` must succeed before
@@ -25,7 +26,7 @@ WHY IT IS SHAPED THIS WAY
   * Every arm carries the resolved config and its sha256, so a results row is
     self-describing months later.
 
-Typical use:  run = open_run("configs/base.json"); print_budget(run)
+Typical use:  run = open_run("config.json"); print_budget(run)
               build_data(run); probe(run); run_grid(run); ruler(run)
 
 CLI:  python3 dapt_lib.py budget|selftest|config [path] [overrides]
@@ -49,9 +50,9 @@ __all__ = [
 ]
 
 DEFAULT_CONFIG_CANDIDATES = (
-    "configs/base.json",
-    "base.json",
-    "/content/drive/MyDrive/Med_Qwen3.5_4B/configs/base.json",
+    "config.json",                                     # repo root -- the file you edit
+    "/content/med-dapt-qwen35-ablation/config.json",    # the Colab clone
+    "configs/config.json",
 )
 
 
@@ -93,9 +94,16 @@ def _read_json(p):
 
 
 def _resolve_override(overrides, base_path):
-    """Find an override file: as given, then next to the base config."""
+    """Find an override file: as given, then next to config.json, then in configs/.
+
+    config.json sits at the repo root, so a bare name like "ctx4096.json" means
+    configs/ctx4096.json -- that is where variants live.
+    """
     d = os.path.dirname(os.path.abspath(base_path))
-    for cand in (overrides, os.path.join(d, overrides), os.path.join(d, os.path.basename(overrides))):
+    for cand in (overrides,
+                 os.path.join(d, overrides),
+                 os.path.join(d, "configs", overrides),
+                 os.path.join(d, "configs", os.path.basename(overrides))):
         if os.path.exists(cand):
             return os.path.abspath(cand)
     raise FileNotFoundError("override config not found: %s" % overrides)

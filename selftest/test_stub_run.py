@@ -29,7 +29,7 @@ OVR = {"ablation_root": TMP,
 
 print("=" * 72)
 print("1. env gates")
-run = d.open_run("configs/base.json", overrides=OVR)
+run = d.open_run("config.json", overrides=OVR)
 d.verify_env(run)
 
 print()
@@ -46,7 +46,7 @@ for label, over, expect in (
         ("default (tie broken)", {}, "TIE BROKEN"),
         ("ensure_weight_tying", {"ensure_weight_tying": True}, "TIE PRESERVED"),
         ("ADONLY (modules_to_save=null)", {"modules_to_save": None}, "FROZEN")):
-    r2 = d.Run(d.load_config("configs/base.json", d.deep_merge(OVR, over)))
+    r2 = d.Run(d.load_config("config.json", d.deep_merge(OVR, over)))
     cfg = d.deep_merge(r2.arms[0], over)
     print("--- %s" % label)
     m, tok, text_tok = d.build_model(r2, cfg)
@@ -54,7 +54,7 @@ for label, over, expect in (
 
 print("=" * 72)
 print("4. probe")
-probe_run = d.Run(d.load_config("configs/base.json", OVR))
+probe_run = d.Run(d.load_config("config.json", OVR))
 sec = d.probe(probe_run)
 assert sec > 0
 print("  probe returned %.4f s/step" % sec)
@@ -62,7 +62,7 @@ print("  probe returned %.4f s/step" % sec)
 print()
 print("=" * 72)
 print("5. run_grid (all 6 arms)")
-run = d.Run(d.load_config("configs/base.json", OVR))
+run = d.Run(d.load_config("config.json", OVR))
 d.run_grid(run)
 done = run.done_ids()
 print("  arms done: %s" % sorted(done))
@@ -89,7 +89,7 @@ assert "cfg_hash" in rows[0], "results.csv header lacks the config hash"
 print("  results.csv: %d rows (header + %d arms), header carries cfg_hash"
       % (len(rows), len(rows) - 1))
 # the run's own frozen copy of the resolved config (so a later edit to
-# configs/base.json cannot silently re-label old results)
+# config.json cannot silently re-label old results)
 rc = json.load(open(run.run_config_path))
 assert rc["model_id"] == run.cfg["model_id"] and len(rc["grid"]) == len(run.arms)
 print("  run_config.json: %d grid arms frozen, model_id=%s"
@@ -111,7 +111,7 @@ print()
 print("=" * 72)
 print("9. phase0 (run=true, small ladder)")
 p0 = d.deep_merge(OVR, {"phase0": {"run": True, "steps": [10, 20]}})
-r3 = d.Run(d.load_config("configs/base.json", p0))
+r3 = d.Run(d.load_config("config.json", p0))
 d.phase0(r3)
 txt = open(run.results_csv).read()
 p0rows = [l for l in txt.strip().split("\n") if ",phase0," in l]
@@ -140,4 +140,4 @@ print("  re-running run_grid added 0 rows (pending() is empty by arm_status)")
 
 shutil.rmtree(TMP, ignore_errors=True)
 print()
-print("ALL STUB-RUN CHECKS PASS  (config %s)" % os.environ.get("DAPT_CFG", "configs/base.json"))
+print("ALL STUB-RUN CHECKS PASS  (config %s)" % os.environ.get("DAPT_CFG", "config.json"))

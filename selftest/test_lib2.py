@@ -5,9 +5,9 @@ sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 import dapt_lib as d
 
-base = d.load_config("configs/base.json")
+base = d.load_config("config.json")
 print("=== variant deep-merge (ctx4096.json) ===")
-v = d.load_config("configs/base.json", "ctx4096.json")
+v = d.load_config("config.json", "ctx4096.json")
 assert v["baseline"] == base["baseline"], "variant leaked into the baseline"
 assert v["budget"] == base["budget"], "variant must not touch the budget"
 assert v["_overrides_path"].endswith("ctx4096.json")
@@ -25,7 +25,7 @@ print("  warnings:", d.check_config(v, rv.arms))
 
 print()
 print("=== the seq_len guard ===")
-bad = d.load_config("configs/base.json", {"budget": {"seq_len": 4096}})
+bad = d.load_config("config.json", {"budget": {"seq_len": 4096}})
 w = [x for x in d.check_config(bad) if "seq_len" in x]
 assert w, "seq_len drift was not caught"
 print("  caught:", w[0][:120], "...")
@@ -33,7 +33,7 @@ print("  caught:", w[0][:120], "...")
 print()
 print("=== ruler on synthetic arms (no pandas installed -> stdlib fallback) ===")
 tmp = tempfile.mkdtemp(prefix="dapt_ruler_")
-run = d.Run(d.load_config("configs/base.json", {"ablation_root": tmp}))
+run = d.Run(d.load_config("config.json", {"ablation_root": tmp}))
 for aid, dm, guard_delta in (("B", 1.10, +0.10), ("R16", 1.08, +0.01), ("LO", 1.12, -0.02)):
     arm = [a for a in run.arms if a["arm_id"] == aid][0]
     os.makedirs(run.arm_dir(arm), exist_ok=True)
