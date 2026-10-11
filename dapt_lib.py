@@ -875,8 +875,9 @@ def make_trainer(run, model, tok, text_tok, cfg, packed, eval_ds):
     emb_lr = cfg["learning_rate"] * cfg["embedding_lr_ratio"]
 
     # Short screening arms: keep checkpoints OFF Drive. modules_to_save writes
-    # the full embed_tokens + lm_head (~2.5 GB per checkpoint on the 4B; the
-    # ADONLY arm has neither, so its checkpoints are adapter-sized, ~0.12 GB) and
+    # the full embed_tokens + lm_head (~1.4 GB per checkpoint on the 4B: the pair
+    # stays tied, so it is written once, not twice; the ADONLY arm has neither, so
+    # its checkpoints are adapter-sized, ~0.12 GB) and
     # best-checkpoint selection is meaningless over a couple of hundred steps.
     # run.arm_saves(cfg) opts an individual arm in - required for any run that
     # will outlive one session, since without a checkpoint there is nothing to
@@ -1313,10 +1314,12 @@ def phase0(run):
 # =====================================================================
 def verify_adapters(run, best):
     """Inspect a saved arm's state dict. modules_to_save writes the FULL
-    embed_tokens + lm_head; on this tied base PEFT's wrapper unties the copies,
-    so expect ~2.5 GB per checkpoint (2 x 636M params bf16). If `best` is ADONLY
-    there is no modules_to_save in the state dict at all: the counts print 0 and
-    the tie check prints False.
+    embed_tokens + lm_head; MEASURED, this stack keeps the pair tied (PEFT moves
+    lm_head into modules_to_tie and shares the embedding's copy), so expect
+    ~1.4 GB per checkpoint -- the pair once plus the adapter -- not the ~2.5 GB
+    two independent copies would cost. If `best` is ADONLY there is no
+    modules_to_save in the state dict at all: the counts print 0 and the tie
+    check prints False.
     """
     from safetensors.torch import load_file
 

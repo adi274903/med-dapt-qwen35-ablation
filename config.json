@@ -74,7 +74,7 @@
 
   "saving": {
     "save_models": false,
-    "_save_why": "Screen pass: NO. The screen's product is the LOSS NUMBERS, not weights. modules_to_save writes the FULL embed_tokens + lm_head and PEFT unties them on this base, so a checkpoint is ~2.5 GB (2 x 636M x bf16). Set true -- or list ids in save_arms -- for the confirm stage and for ANY run that outlives one session: without a checkpoint there is nothing to resume from and the run is lost.",
+    "_save_why": "Screen pass: NO. The screen's product is the LOSS NUMBERS, not weights. modules_to_save writes the FULL embed_tokens + lm_head, and on this base the pair stays TIED (PEFT points lm_head at the embedding's copy), so a checkpoint writes it once: ~1.4 GB, not the ~2.5 GB two independent copies would cost. Set true -- or list ids in save_arms -- for the confirm stage and for ANY run that outlives one session: without a checkpoint there is nothing to resume from and the run is lost.",
     "save_arms": []
   },
 
