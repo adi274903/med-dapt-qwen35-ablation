@@ -88,12 +88,13 @@ not spend them).
 
 Two model facts drive the design and are asserted in `build_model()`, not assumed:
 
-1. `tie_word_embeddings=True` on the 4B. PEFT's `modules_to_save` deep-copies
-   both `embed_tokens` and `lm_head`, so **the tie is broken** and both copies
-   are trainable: 1.271B of the 1.329B trainable parameters. `ensure_weight_tying`
-   is exposed as a baseline key (default `false`, i.e. the behaviour above);
-   set it `true` and PEFT keeps **one** trainable tensor and wires the head to it.
-   That changes *what is trainable*, so it belongs in the grid as its own arm.
+1. `tie_word_embeddings=True` on the 4B. PEFT's `modules_to_save` wraps both
+   `embed_tokens` and `lm_head`, and both stay trainable — but **the tie is kept,
+   measured, not assumed**: PEFT moves `lm_head` into `modules_to_tie` and points
+   it at the embedding's trainable copy, so the pair moves as one 0.636B-param
+   tensor out of 0.694B trainable. `ensure_weight_tying` was exposed as a baseline
+   key to buy exactly that state; since it happens anyway, the key is a **no-op
+   here**, and `build_model()` reports the tie state it actually got.
 2. bf16 is mandatory (`qwen3_5` is in Unsloth's `FORCE_FLOAT32`) and QLoRA is
    discouraged for this model.
 
@@ -129,8 +130,8 @@ python3 dapt_lib.py ruler       # scores whatever arms have finished
 JSON looks: it prints what the config *actually* resolved to.)
 
 `selftest/` goes further: a stub `torch`/`datasets`/`unsloth` tree that lets the
-entire module execute end-to-end — all three `build_model` branches (tie broken /
-`ensure_weight_tying` / adapter-only), the trainer callbacks, `run_grid`'s budget
+entire module execute end-to-end — all three `build_model` paths (tie preserved,
+tie broken, adapter-only), the trainer callbacks, `run_grid`'s budget
 guards, `status.json` + `results.csv`, the ruler, `phase0` and the adapter
 inspector — with no accelerator.
 
