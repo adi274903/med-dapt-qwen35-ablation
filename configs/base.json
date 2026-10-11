@@ -1,0 +1,162 @@
+{
+  "_readme": [
+    "Medical DAPT / DoRA ablation -- ALL knobs for the Qwen3.5-4B-Base run.",
+    "Logic lives in dapt_lib.py; narrative lives in the notebook. This file is data only.",
+    "",
+    "WHY JSON HAS NO COMMENTS: every non-obvious knob carries a sibling '_why' string",
+    "right next to it. Keep them when you fork a variant -- they are the provenance.",
+    "",
+    "VARIANTS: never edit this file to run an experiment. Add configs/<name>.json with",
+    "only the keys you change and pass it as `overrides` to open_run(); dapt_lib",
+    "deep-merges it. See configs/ctx4096.json for a worked example.",
+    "",
+    "THE ONE RULE: budget.sec_per_step is a PLACEHOLDER (12.0) until you run probe().",
+    "A wrong s/step does not error -- it silently rescales tokens/arm, which is the",
+    "only thing that makes arms comparable.",
+    "",
+    "budget.seq_len is the REFERENCE length the token budget is defined at",
+    "(tokens/arm = steps x effective_batch x seq_len). To change context, set an",
+    "ARM's max_length -- never seq_len, which would silently rescale tokens/arm.",
+    "An arm at a longer context gets proportionally fewer steps for the same tokens."
+  ],
+
+  "model_id": "Qwen/Qwen3.5-4B-Base",
+  "_model_why": "Was Qwen/Qwen3.8-27B. Same arch family (qwen3_5, hybrid 3 linear : 1 full attn, vocab 248320) so the adapter/tokenizer surface is unchanged. 4.66B total = 4.35B text + 0.31B ViT. Needs transformers >= 5.2.0. This base TIES word embeddings (the 27B does not) -- cell 8 / build_model() asserts on that.",
+  "ablation_root": "/content/drive/MyDrive/Med_Qwen3.5_4B/ablation",
+
+  "budget": {
+    "wall_h_per_arm": 5.0,
+    "_wall_h_why": "The knob to think in. 1.0 h/arm = 192 steps, and the fixed 0.36 h per-arm overhead is 36% of that clock. 3.0 h = 792 steps / 26.0M tokens. 5.0 h = 1392 steps / 45.6M tokens. 6 arms x 5.0 h = 30 h.",
+    "total_budget_hours": 45.0,
+    "_total_why": "Ceiling for the whole grid: 30 h grid + 10 h for the two B seed reps + 5 h margin. The driver stops before exceeding it.",
+    "session_hours": 9.5,
+    "effective_batch": 16,
+    "_effective_batch_why": "per_device_train_batch_size 2 x gradient_accumulation_steps 8.",
+    "seq_len": 2048,
+    "sec_per_step": 12.0,
+    "_sec_per_step_why": "PLACEHOLDER for the 4B on the RTX 6000 Pro (G4), scaled from the measured 27B number (36.0) by the 4.35B-vs-27B text-param ratio. RUN probe() FIRST. ~12 s/step = 2731 tok/s = 9.83M tok/h.",
+    "units_per_hour": 8.71,
+    "unit_balance": 1000,
+    "text_params": 4350000000,
+    "_text_params_why": "Text tower only, used for the tok/param readout. The ViT adds ~0.31B and never trains here."
+  },
+
+  "overheads": {
+    "eval_per_source": 100,
+    "_eval_per_source_why": "Held-out rows per source. 200 was 2x this; the eval cost is counted in the budget so it cannot drift.",
+    "evals_per_run": 6,
+    "_evals_per_run_why": "Eval points DURING training. The overhead term adds step-0 and final on top, so it is (2 + evals_per_run) full passes.",
+    "model_load_min": 1.5,
+    "eval_minutes": 2.5
+  },
+
+  "trainer": {
+    "warmup_ratio": 0.06,
+    "_warmup_why": "The DAPT recipe uses 6% of steps.",
+    "saves_per_run": 1,
+    "logging_steps": 5,
+    "per_device_train_batch_size": 2,
+    "per_device_eval_batch_size": 2,
+    "_eval_batch_why": "HF default 8 would blow VRAM in eval.",
+    "gradient_accumulation_steps": 8,
+    "optim": "adamw_8bit",
+    "lr_scheduler_type": "cosine",
+    "lr_scheduler_num_cycles": 0.5,
+    "max_grad_norm": 1.0,
+    "save_total_limit": 2,
+    "report_to": "tensorboard",
+    "best_model_min_steps": 400,
+    "_best_model_why": "load_best_model_at_end is meaningless over a couple of hundred steps, so it only switches on for saves AND steps >= this."
+  },
+
+  "saving": {
+    "save_models": false,
+    "_save_why": "Screen pass: NO. The screen's product is the LOSS NUMBERS, not weights. modules_to_save writes the FULL embed_tokens + lm_head and PEFT unties them on this base, so a checkpoint is ~2.5 GB (2 x 636M x bf16). Set true -- or list ids in save_arms -- for the confirm stage and for ANY run that outlives one session: without a checkpoint there is nothing to resume from and the run is lost.",
+    "save_arms": []
+  },
+
+  "lora": {
+    "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    "default_modules_to_save": ["embed_tokens", "lm_head"],
+    "_mts_why": "embed/head can only be trained through modules_to_save on this path: finetune_vision_layers=False enables scoping and the finetune_* filter silently drops them from target_modules. On a TIED base never wrap only one of the pair. An arm that sets modules_to_save=null (ADONLY) freezes both and trains the adapter only -- build_model() asserts the tie is intact in that case.",
+    "bias": "none",
+    "use_rslora": false,
+    "_rslora_why": "rsLoRA conflicts with DoRA; left here as an explicit false so a variant cannot quietly switch it on.",
+    "gradient_checkpointing": "unsloth"
+  },
+
+  "data": {
+    "seed": 42,
+    "shuffle_buffer": 10000,
+    "sources": [
+      {"name": "MedRAG textbooks",     "path": "MedRAG/textbooks",                                    "config": null, "formatter": "medrag"},
+      {"name": "MedRAG PubMed",        "path": "MedRAG/pubmed",                                        "config": null, "formatter": "medrag"},
+      {"name": "Open-Patients",        "path": "ncbi/Open-Patients",                                   "config": null, "formatter": "patients"},
+      {"name": "WikiDoc patient info", "path": "medalpaca/medical_meadow_wikidoc_patient_information", "config": null, "formatter": "wikidoc"},
+      {"name": "WikiDoc general",      "path": "medalpaca/medical_meadow_wikidoc",                     "config": null, "formatter": "wikidoc"},
+      {"name": "FineWeb-Edu",          "path": "HuggingFaceFW/fineweb-edu",                            "config": "sample-10BT", "formatter": "edu"},
+      {"name": "Orca-Math",            "path": "microsoft/orca-math-word-problems-200k",               "config": null, "formatter": "math"}
+    ],
+    "mix": [0.35, 0.35, 0.10, 0.07, 0.03, 0.07, 0.03],
+    "_mix_why": "72% medical, 28% general. The general slice is the FORGETTING GUARD: it is the only thing that can catch a medical run that destroyed general ability. Sum must be 1.0 (asserted).",
+    "domain_sources": ["MedRAG_textbooks", "MedRAG_PubMed", "Open_Patients", "WikiDoc_patient_info", "WikiDoc_general"],
+    "guard_sources": ["FineWeb_Edu", "Orca_Math"],
+    "checkpoint_metric_source": "MedRAG_PubMed",
+    "_checkpoint_metric_why": "With a dict eval_dataset there is NO plain eval_loss -- HF prefixes every key with the dataset name, so exactly one dataset must be named here."
+  },
+
+  "baseline": {
+    "use_dora": true,
+    "r": 32,
+    "lora_alpha": 64,
+    "_rank_why": "alpha = 2*r keeps the effective scaling alpha/r = 2 identical to the original r=128 config, and r=32 is 1.25% of the base instead of 4.93%. Every arm's adapter is <= 1.25% here; the DoRA paper's own LLaMA-7B setup is 2.31%/2.33%.",
+    "learning_rate": 0.0001,
+    "embedding_lr_ratio": 0.1,
+    "_emblr_why": "embedding_learning_rate = learning_rate * this = 1e-5. Decoupled because embed_tokens+lm_head is 1.271B of the 1.329B trainable parameters: 95.6% of everything that moves. ARM EMB1 sets it to 1.0 to test whether the decoupling is needed at all.",
+    "lora_dropout": 0.0,
+    "max_length": 2048,
+    "ensure_weight_tying": false,
+    "_tying_why": "PEFT's default (false) on this tied base: modules_to_save deep-copies embed_tokens AND lm_head separately, so the tie is BROKEN and both copies are trainable -- 1.271B trainable, ~2.5 GB checkpoints. PEFT warns about exactly this (peft#2777) and ships the opt-in fix: true leaves ONE trainable embedding/head tensor and wires the head to it (lm_head drops out of modules_to_save into modules_to_tie), so trainable drops to ~636M and a checkpoint to ~1.2 GB. It changes WHAT IS TRAINABLE, so it is a grid arm, not a free knob; build_model() reports which of the two actually happened either way, and raises if unsloth silently drops the kwarg.",
+    "seed": 3407
+  },
+
+  "grid": [
+    {"id": "B", "desc": "baseline: DoRA r=32 a=64 LR 1e-4", "overrides": {}},
+    {"id": "R16", "desc": "rank 16 (a=32) -- can rank drop further?", "overrides": {"r": 16, "lora_alpha": 32}},
+    {"id": "LO", "desc": "LoRA instead of DoRA (r=32)", "overrides": {"use_dora": false}},
+    {"id": "LR3e4", "desc": "learning rate 3e-4", "overrides": {"learning_rate": 0.0003}},
+    {"id": "EMB1", "desc": "no decoupled embedding LR (embLR = LR)", "overrides": {"embedding_lr_ratio": 1.0}},
+    {"id": "ADONLY", "desc": "adapter only: embed_tokens/lm_head FROZEN", "overrides": {"modules_to_save": null}}
+  ],
+  "_grid_why": [
+    "Cut from 10 arms. Removed: r=128 (4.93% of the base) and r=256 (9.83%) entirely -- both are over the ~1-2% adapter line with a known answer, since rank saturates at 8-32; r=64 (2.47%) for the same reason; LR 3e-5 (redundant direction when 1e-4 -> 3e-4 brackets the ~2e-4 default in one arm); lora_dropout 0.05 (not a lever at this token budget); max_length 4096 (a deployment choice, and for the same tokens it would cost half the steps).",
+    "ADONLY is the one arm that is NOT a one-factor tweak: it changes what is trainable. It exists because modules_to_save makes 1.271B of the 1.329B trainable parameters the embed/head pair. Freezing that takes trainable from 1.329B to 58.1M (22.9x), grads + 8-bit optimizer state from ~5.3 GB to ~0.23 GB, checkpoints from ~2.5 GB to ~0.12 GB, and lifts data exposure from 0.034 to 0.785 tokens per trainable parameter. Read it as its own recipe, not as a delta from B."
+  ],
+
+  "ruler": {
+    "retention_tol": 0.05,
+    "_tol_why": "Allowed rise in a guard (general-ability) loss before the arm is VETOED regardless of how good its domain loss is. Each arm is compared against its OWN step-0 baseline."
+  },
+
+  "probe": {
+    "steps": 20,
+    "warmup": 5,
+    "_warmup_why": "The Mamba/GDN Triton kernels compile at load, so the first few steps are not representative. Discarded before timing."
+  },
+
+  "phase0": {
+    "run": false,
+    "root_suffix": "phase0",
+    "steps": [300, 1000, 3000, 8000],
+    "force_save_min_steps": 1000,
+    "_phase0_why": "The grid answers 'which config ranks best'; it cannot answer 'did the medical mix move this base', because 45M tokens is 0.010 tokens/param and canonical DAPT is 1-7. This curve runs ONLY the baseline at growing step counts: 300 -> 8000 steps spans 9.8M -> 262M tokens (0.002 -> 0.060 tok/param) and ~1.4 -> 27 h. The bend is the answer, and it also tells you which grid budget is worth spending. Runs >= force_save_min_steps checkpoint and can resume. Cheaper alternative: the same curve on Qwen3.5-0.8B-Base -- same family and tokenizer, ~5.4x the tokens/param for the same wall clock, and the recipe ranking transfers."
+  },
+
+  "env": {
+    "transformers_min": "5.2.0",
+    "transformers_max_exclusive": "5.18.0",
+    "_tf_why": "Below 5.2 the qwen3_5 arch does not exist; 5.19.0 is on PyPI and is outside Unsloth's tested range (ceiling 5.17.0). datasets < 5.0.0 and trl <= 1.13.0 for the same reason. bf16 is mandatory: the GDN layers give NaN grad norms in fp16. Do not switch to QLoRA -- unsloth advises against 4-bit for Qwen3.5.",
+    "bf16_required": true,
+    "check_packages": ["flash_attn", "cut_cross_entropy", "fla", "xformers", "triton", "bitsandbytes"]
+  }
+}

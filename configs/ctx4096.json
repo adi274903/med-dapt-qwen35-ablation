@@ -1,0 +1,36 @@
+{
+  "_readme": [
+    "WORKED EXAMPLE of a variant config. It holds ONLY what it changes.",
+    "Use it as:  run = dapt_lib.open_run(CFG_PATH, overrides='ctx4096.json')",
+    "            (a bare name also resolves next to base.json)",
+    "",
+    "Deep-merge semantics: dicts merge key-by-key; everything else -- including",
+    "ARRAYS -- is replaced wholesale. So a variant that changes the grid must",
+    "restate the whole `grid` array. That is why the grid is repeated below.",
+    "",
+    "HOW TO CHANGE CONTEXT: set an ARM's max_length. Do NOT touch budget.seq_len.",
+    "seq_len is the reference length the token budget is defined at (45.6M",
+    "tokens/arm = steps x effective_batch x seq_len); raising it would silently",
+    "double the token budget instead of changing context. check_config() warns",
+    "if seq_len and the baseline's own max_length ever diverge."
+  ],
+
+  "grid": [
+    {"id": "B", "desc": "baseline: DoRA r=32 a=64 LR 1e-4", "overrides": {}},
+    {"id": "B4k", "desc": "baseline, 4096 context", "overrides": {"max_length": 4096}},
+    {"id": "R16", "desc": "rank 16 (a=32) -- can rank drop further?", "overrides": {"r": 16, "lora_alpha": 32}},
+    {"id": "LO", "desc": "LoRA instead of DoRA (r=32)", "overrides": {"use_dora": false}},
+    {"id": "EMB1", "desc": "no decoupled embedding LR (embLR = LR)", "overrides": {"embedding_lr_ratio": 1.0}}
+  ],
+
+  "_variant_why": [
+    "4096 context is a DEPLOYMENT choice, not an ablation: it answers 'does the",
+    "arm ranking survive at the context I will actually serve at?'",
+    "B4k sees the same 45.6M tokens as B (tokens/arm is held constant), so it",
+    "gets half the steps: 696 instead of 1392. Its wall-clock estimate is",
+    "OPTIMISTIC -- sec_per_step was measured at 2048, and per-step cost scales",
+    "roughly with sequence length. If B4k matters, re-probe at 4096 and set",
+    "sec_per_step from that measurement before trusting its hours.",
+    "This variant drops LR3e4 and ADONLY to stay inside the 45 h ceiling."
+  ]
+}
