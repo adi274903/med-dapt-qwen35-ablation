@@ -734,9 +734,12 @@ def build_model(run, cfg):
     trainable = set(n for n, p in model.named_parameters() if p.requires_grad)
     n_ms = sum(1 for n in trainable if "modules_to_save" in n)
     n_par = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    n_tot = sum(p.numel() for p in model.parameters())   # deduped: shared tensors once
     tie_kept = bool(want_ms) and w_head is w_emb
-    print("  trainable tensors: %d  (modules_to_save: %d, %.2fB params)"
-          % (len(trainable), n_ms, n_par / 1e9))
+    print("  trainable tensors: %d  (modules_to_save: %d of them)"
+          % (len(trainable), n_ms))
+    print("  trainable params : %.3fB of %.3fB  (%.2f%%)   <-- live count, not a plan"
+          % (n_par / 1e9, n_tot / 1e9, 100.0 * n_par / n_tot))
     if not want_ms:
         pair = float(model.get_input_embeddings().weight.numel())  # measured, not assumed
         print("  adapter-only: embed/head frozen, so grads + 8-bit optimizer state")
@@ -844,14 +847,31 @@ def make_probes(model, cfg, tokens_per_step):
             self.t0 = _time.perf_counter()
             torch.cuda.reset_peak_memory_stats()
             opt = kw.get("optimizer")
+            self.opt = opt
+            self.live_lr_printed = False
             if opt is not None:
-                lrs = set()
+                # group["lr"] here is the WARMUP value: with a warmup schedule
+                # every group sits at lr=0 on step 0, so comparing group["lr"]
+                # reports "single LR" even on a correctly decoupled run. Read the
+                # LRs the groups were BUILT with (scheduler.base_lrs, else
+                # initial_lr) and re-check the live values mid-run.
+                sched = kw.get("lr_scheduler")
+                base = list(getattr(sched, "base_lrs", None) or [])
                 print("  [%s] optimizer param groups:" % self.cfg["arm_id"])
                 for i, g in enumerate(opt.param_groups):
-                    lrs.add(round(g["lr"], 12))
-                    print("      group[%d] lr=%g n_params=%d" % (i, g["lr"], len(g["params"])))
-                if len(lrs) < 2:
-                    print("      !! single LR -- embedding_learning_rate is a NO-OP")
+                    print("      group[%d] lr_now=%g initial_lr=%s base_lr=%s n_params=%d"
+                          % (i, g["lr"],
+                             ("%g" % g["initial_lr"]) if g.get("initial_lr") is not None else "-",
+                             ("%g" % base[i]) if i < len(base) else "-",
+                             len(g["params"])))
+                intents = [round(b, 12) for b in base] or [
+                    round(g.get("initial_lr", g["lr"]), 12) for g in opt.param_groups]
+                n_lr = len(set(intents))
+                if n_lr < 2:
+                    print("      !! single LR (%s) -- embedding_learning_rate is a NO-OP"
+                          % sorted(set(intents)))
+                else:
+                    print("      decoupled: %d LR values %s" % (n_lr, sorted(set(intents))))
 
         def on_log(self, args, state, control, logs=None, **kw):
             if not state.global_step or self.t0 is None:
@@ -867,6 +887,12 @@ def make_probes(model, cfg, tokens_per_step):
         def on_step_end(self, args, state, control, **kw):
             if state.global_step % self.grad_every:
                 return
+            opt = getattr(self, "opt", None)
+            if not getattr(self, "live_lr_printed", True) and opt is not None:
+                # past the warmup now: these are the LRs actually in force.
+                self.live_lr_printed = True
+                print("      live LRs @%d: %s"
+                      % (state.global_step, ["%g" % g["lr"] for g in opt.param_groups]))
             parts = []
             for n, p in self.watched[:3]:
                 if n in self.last_grad:          # recorded inside backward
@@ -1021,8 +1047,9 @@ def probe(run):
     print("  SEC_PER_STEP    : %.1f        <-- set budget.sec_per_step, re-run the budget cell"
           % sec_per_step)
     print("  throughput      : %.0f tok/s  (%.2fM tok/h)" % (tok_per_s, tok_per_s * 3600 / 1e6))
-    print("  peak VRAM       : %.1f GiB of 96    (headroom buys batch/context, not steps/h)"
-          % peak)
+    total_gib = torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
+    print("  peak VRAM       : %.1f GiB of %.0f    (headroom buys batch/context, not steps/h)"
+          % (peak, total_gib))
     print("  at wall_h_per_arm=%.1f -> %d steps/arm = %.1fM tokens/arm (%.5f tok/param)"
           % (b["wall_h_per_arm"], at_probe, at_probe_tok / 1e6, at_probe_tok / d["text_params"]))
     print("  grid as configured (sec_per_step=%.1f): %d steps/arm, %.1fM tokens/arm, %.1f h total"
