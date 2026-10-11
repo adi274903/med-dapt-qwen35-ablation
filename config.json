@@ -29,9 +29,9 @@
 
   "budget": {
     "wall_h_per_arm": 2.99,
-    "_wall_h_why": "The knob to think in, now that sec_per_step is MEASURED at 6.8 (A100): 1.0 h/arm = 340 steps, and the fixed 0.36 h per-arm overhead is still 36% of a 1.0 h clock. 2.99 h = 1393 steps / 45.6M tokens -- the designed data-starved regime, which is why 2.99 is the value set. 3.0 h = 1399 steps / 45.8M. 5.0 h = 2457 steps / 80.5M tokens, if you would rather buy data with the freed wall clock. 6 arms x 2.99 h = 17.9 h.",
+    "_wall_h_why": "The knob to think in, now that sec_per_step is MEASURED at 6.8 (A100): 1.0 h/arm = 340 steps, and the fixed 0.36 h per-arm overhead is still 36% of a 1.0 h clock. 2.99 h = 1393 steps / 45.6M tokens -- the designed data-starved regime, which is why 2.99 is the value set. 3.0 h = 1399 steps / 45.8M. 5.0 h = 2457 steps / 80.5M tokens, if you would rather buy data with the freed wall clock. 5 arms x 2.99 h = 14.95 h (arm list and its order: see _grid_why).",
     "total_budget_hours": 45.0,
-    "_total_why": "Ceiling for the whole grid at the measured 6.8 s/step: 17.9 h grid (6 arms x 2.99 h) + 6.0 h for the two B seed reps + 20 h margin, because the margin IS the confirm stage's budget. The driver stops before exceeding it. Units at 8.71/h: ~24 h of runs = 209 units of the 1000 balance.",
+    "_total_why": "Ceiling for the whole grid at the measured 6.8 s/step: 14.95 h grid (5 arms x 2.99 h) + 6.0 h for the two B seed reps + 24 h margin, because the margin IS the confirm stage's budget. The driver stops before exceeding it. Units at 8.71/h: ~21 h of runs = 183 units of the 1000 balance.",
     "session_hours": 9.5,
     "effective_batch": 16,
     "_effective_batch_why": "per_device_train_batch_size 2 x gradient_accumulation_steps 8.",
@@ -124,16 +124,19 @@
   },
 
   "grid": [
-    {"id": "B", "desc": "baseline: DoRA r=32 a=64 LR 1e-4", "overrides": {}},
-    {"id": "R16", "desc": "rank 16 (a=32) -- can rank drop further?", "overrides": {"r": 16, "lora_alpha": 32}},
-    {"id": "LO", "desc": "LoRA instead of DoRA (r=32)", "overrides": {"use_dora": false}},
-    {"id": "LR3e4", "desc": "learning rate 3e-4", "overrides": {"learning_rate": 0.0003}},
-    {"id": "EMB1", "desc": "no decoupled embedding LR (embLR = LR)", "overrides": {"embedding_lr_ratio": 1.0}},
-    {"id": "ADONLY", "desc": "adapter only: embed_tokens/lm_head FROZEN", "overrides": {"modules_to_save": null}}
+    {"id": "B", "desc": "baseline: DoRA r=32 a=64 LR 1e-4, embLR ratio 0.1", "overrides": {}},
+    {"id": "EMB1", "desc": "embLR ratio 1.0 -- the 1.0 end of the embed-LR curve", "overrides": {"embedding_lr_ratio": 1.0}},
+    {"id": "EMB3", "desc": "embLR ratio 0.3 -- midpoint of B (0.1) -> EMB1 (1.0)", "overrides": {"embedding_lr_ratio": 0.3}},
+    {"id": "ADONLY", "desc": "adapter only: embed_tokens/lm_head FROZEN", "overrides": {"modules_to_save": null}},
+    {"id": "LO", "desc": "LoRA instead of DoRA (r=32)", "overrides": {"use_dora": false}}
   ],
   "_grid_why": [
     "Cut from 10 arms. Removed: r=128 (4.93% of the base) and r=256 (9.83%) entirely -- both are over the ~1-2% adapter line with a known answer, since rank saturates at 8-32; r=64 (2.47%) for the same reason; LR 3e-5 (redundant direction when 1e-4 -> 3e-4 brackets the ~2e-4 default in one arm); lora_dropout 0.05 (not a lever at this token budget); max_length 4096 (a deployment choice, and for the same tokens it would cost half the steps).",
-    "ADONLY is the one arm that is NOT a one-factor tweak: it changes what is trainable. It exists because modules_to_save makes the embed/head pair 0.636B of the measured 0.679B trainable parameters (on this stack the pair is tied, so it counts once). Freezing it takes trainable from 0.679B to the adapter's own 43.2M (15.7x), grads + 8-bit optimizer state from ~2.7 GB to ~0.17 GB, checkpoints from ~1.4 GB to ~0.09 GB, and lifts data exposure from 0.067 to 1.06 tokens per trainable parameter. Read it as its own recipe, not as a delta from B."
+    "ADONLY is the one arm that is NOT a one-factor tweak: it changes what is trainable. It exists because modules_to_save makes the embed/head pair 0.636B of the measured 0.679B trainable parameters (on this stack the pair is tied, so it counts once). Freezing it takes trainable from 0.679B to the adapter's own 43.2M (15.7x), grads + 8-bit optimizer state from ~2.7 GB to ~0.17 GB, checkpoints from ~1.4 GB to ~0.09 GB, and lifts data exposure from 0.067 to 1.06 tokens per trainable parameter. Read it as its own recipe, not as a delta from B.",
+    "RE-ORDERED and RE-CUT (5 arms) after the novelty check. ORDER IS NOT COSMETIC: the driver charges each arm the configured 2.99 h against session_hours 9.5, so the cell stops itself after 3 arms even though a measured arm really costs ~2.0 h on the G4 -- the first three slots are therefore the arms that must land together, in one session.",
+    "B (0.1) + EMB1 (1.0) + EMB3 (0.3) are ONE CURVE on the embedding-LR ratio, and that is the only factor in this grid that published work has not measured: Biderman et al. 2024 explicitly defer empirical work on full training of the input/output embedding pair as 'future work' (arXiv:2405.09673, App. A.1), whereas the rank and LR effects ARE measured in the clinical domain and are small -- <=0.0125 AUROC across ranks 8-128 (arXiv:2402.10597), i.e. inside this grid's own noise floor at one seed.",
+    "ADONLY sits fourth because it is the shipping decision, not a finding; LO stays as the last slot because it is the one remaining arm whose 2 h is worth paying only if the embed curve does not already settle the question.",
+    "DEFERRED, NOT DROPPED -- definitions are known and they paste back into this list when the embed curve returns a verdict: R16 (r=16, a=32) and LR3e4 (LR 3e-4). Both are one-factor points on axes that already have a published answer at this token budget (rank saturates at 8-32; the recipe default LR is 3e-4, and with underfitting rather than overfitting the live risk at 0.0105 tok/param the answer is close to foreknown). The ~6 h and ~52 units they cost are better spent on the second budget point, which is a trend instead of two more bars."
   ],
 
   "ruler": {

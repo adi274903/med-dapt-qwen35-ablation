@@ -34,7 +34,7 @@ print()
 print("=== ruler on synthetic arms (no pandas installed -> stdlib fallback) ===")
 tmp = tempfile.mkdtemp(prefix="dapt_ruler_")
 run = d.Run(d.load_config("config.json", {"ablation_root": tmp}))
-for aid, dm, guard_delta in (("B", 1.10, +0.10), ("R16", 1.08, +0.01), ("LO", 1.12, -0.02)):
+for aid, dm, guard_delta in (("B", 1.10, +0.10), ("EMB3", 1.08, +0.01), ("LO", 1.12, -0.02)):
     arm = [a for a in run.arms if a["arm_id"] == aid][0]
     os.makedirs(run.arm_dir(arm), exist_ok=True)
     dom = {"eval_%s_loss" % s: dm + 0.01 * i
@@ -46,12 +46,12 @@ for aid, dm, guard_delta in (("B", 1.10, +0.10), ("R16", 1.08, +0.01), ("LO", 1.
     base_l["eval_FineWeb_Edu_loss"] = 2.80
     base_l["eval_Orca_Math_loss"] = 1.50
     json.dump(dict(arm_id=aid, desc=arm["desc"], done=True, wall_hours=4.99,
-                   steps_run=1392, tokens_run=45613056, tok_per_param=0.01049,
+                   steps_run=1393, tokens_run=45645824, tok_per_param=0.010494,
                    domain_mean_final=sum(dom.values()) / len(dom),
                    final_losses=fin, base_losses=base_l, guards={}),
               open(run.status_path(arm), "w"))
 best = d.ruler(run)
-assert best == "R16", best
+assert best == "EMB3", best
 assert os.path.exists(run.ranking_csv)
 rows = open(run.ranking_csv).read().strip().split("\n")
 assert len(rows) == 4
