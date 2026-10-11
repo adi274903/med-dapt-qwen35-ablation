@@ -824,6 +824,21 @@ def make_probes(model, cfg, tokens_per_step):
             self.watched = [(n, p) for n, p in model.named_parameters()
                             if p.requires_grad and ("embed_tokens" in n or "lm_head" in n)]
             self.grad_every = max(1, cfg["steps"] // 4)
+            # Read the gradient WHEN IT EXISTS. `on_step_end` fires AFTER the
+            # trainer has already run optimizer.zero_grad(set_to_none=True), so
+            # p.grad is None there on every step -- reading it there reports
+            # "NOT TRAINING" for modules that are training perfectly well. The
+            # post-accumulate hook fires inside backward, before the zeroing,
+            # and records the norm we actually want.
+            self.last_grad = {}
+            self.hooked = 0
+            for n, p in self.watched:
+                hook = getattr(p, "register_post_accumulate_grad_hook", None)
+                if hook is None:              # torch < 2.1: fall back to .grad
+                    continue
+                hook(lambda pp, _n=n: self.last_grad.__setitem__(
+                    _n, None if pp.grad is None else pp.grad.norm().item()))
+                self.hooked += 1
 
         def on_train_begin(self, args, state, control, **kw):
             self.t0 = _time.perf_counter()
@@ -854,10 +869,13 @@ def make_probes(model, cfg, tokens_per_step):
                 return
             parts = []
             for n, p in self.watched[:3]:
-                g = p.grad
-                label = "embed_tokens" if "embed_tokens" in n else "lm_head"
-                parts.append("%s=%s" % (label, "None  <-- NOT TRAINING" if g is None
-                                        else "%.2e" % g.norm().item()))
+                if n in self.last_grad:          # recorded inside backward
+                    g = self.last_grad[n]
+                else:                            # torch < 2.1 fallback
+                    g = None if p.grad is None else p.grad.norm().item()
+                parts.append("%s=%s" % (n.split("base_model.model.")[-1],
+                                        "None  <-- NOT TRAINING" if g is None
+                                        else "%.2e" % g))
             print("  [%s] gradflow @%d: %s" % (self.cfg["arm_id"], state.global_step,
                                                ", ".join(parts)))
 
