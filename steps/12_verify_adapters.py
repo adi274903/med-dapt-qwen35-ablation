@@ -4,8 +4,10 @@ Deliberately NOT part of the grid: this is validation, not ablation, and it need
 the arm to have been checkpointed (`saving.save_models: true`, or the arm id
 listed in `saving.save_arms`).
 
-`modules_to_save` writes the FULL embed_tokens + lm_head. On this tied base
-PEFT's wrapper unties the copies, so expect ~2.5 GB per checkpoint. If `best` is
+`modules_to_save` writes the FULL embed_tokens + lm_head. MEASURED: on this stack
+the pair stays TIED (PEFT moves lm_head into modules_to_tie and shares the
+embedding's copy), so expect ~1.4 GB per checkpoint -- the pair once plus the
+adapter -- not the ~2.5 GB two independent copies would cost. If `best` is
 ADONLY there is no modules_to_save in the state dict at all: the counts print 0
 and the tie check prints False.
 """

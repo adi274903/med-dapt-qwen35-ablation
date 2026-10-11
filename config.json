@@ -115,11 +115,11 @@
     "_rank_why": "alpha = 2*r keeps the effective scaling alpha/r = 2 identical to the original r=128 config, and r=32 is 1.25% of the base instead of 4.93%. Every arm's adapter is <= 1.25% here; the DoRA paper's own LLaMA-7B setup is 2.31%/2.33%.",
     "learning_rate": 0.0001,
     "embedding_lr_ratio": 0.1,
-    "_emblr_why": "embedding_learning_rate = learning_rate * this = 1e-5. Decoupled because embed_tokens+lm_head is 1.271B of the 1.329B trainable parameters: 95.6% of everything that moves. ARM EMB1 sets it to 1.0 to test whether the decoupling is needed at all.",
+    "_emblr_why": "embedding_learning_rate = learning_rate * this = 1e-5. Decoupled because the embed/head pair is 0.636B of the 0.694B trainable parameters (91.6% of everything that moves) -- and on this stack the pair is TIED, so it counts once, not twice (see _tying_why). ARM EMB1 sets it to 1.0 to test whether the decoupling is needed at all.",
     "lora_dropout": 0.0,
     "max_length": 2048,
     "ensure_weight_tying": false,
-    "_tying_why": "PEFT's default (false) on this tied base: modules_to_save deep-copies embed_tokens AND lm_head separately, so the tie is BROKEN and both copies are trainable -- 1.271B trainable, ~2.5 GB checkpoints. PEFT warns about exactly this (peft#2777) and ships the opt-in fix: true leaves ONE trainable embedding/head tensor and wires the head to it (lm_head drops out of modules_to_save into modules_to_tie), so trainable drops to ~636M and a checkpoint to ~1.2 GB. It changes WHAT IS TRAINABLE, so it is a grid arm, not a free knob; build_model() reports which of the two actually happened either way, and raises if unsloth silently drops the kwarg.",
+    "_tying_why": "MEASURED on this stack (Qwen3.5-4B-Base, tie_word_embeddings=True, unsloth 2026.10.3 + transformers 5.17.0 + peft): the tie is KEPT whether this is false or true. With modules_to_save=['embed_tokens','lm_head'] PEFT wrapped BOTH, moved lm_head out of modules_to_save into modules_to_tie (peft#2777) and pointed it at the SAME trainable tensor as the embedding's copy -- one tensor, 0.636B params, and the head cannot drift from the embedding. So this knob is a NO-OP here, not a lever and not a grid arm; the param and checkpoint numbers in this file come from build_model()'s live count, never from a plan. It would matter again only on a stack where the default really does deep-copy both, so build_model() reports which of the two states actually happened either way.",
     "seed": 3407
   },
 
@@ -133,7 +133,7 @@
   ],
   "_grid_why": [
     "Cut from 10 arms. Removed: r=128 (4.93% of the base) and r=256 (9.83%) entirely -- both are over the ~1-2% adapter line with a known answer, since rank saturates at 8-32; r=64 (2.47%) for the same reason; LR 3e-5 (redundant direction when 1e-4 -> 3e-4 brackets the ~2e-4 default in one arm); lora_dropout 0.05 (not a lever at this token budget); max_length 4096 (a deployment choice, and for the same tokens it would cost half the steps).",
-    "ADONLY is the one arm that is NOT a one-factor tweak: it changes what is trainable. It exists because modules_to_save makes 1.271B of the 1.329B trainable parameters the embed/head pair. Freezing that takes trainable from 1.329B to 58.1M (22.9x), grads + 8-bit optimizer state from ~5.3 GB to ~0.23 GB, checkpoints from ~2.5 GB to ~0.12 GB, and lifts data exposure from 0.034 to 0.785 tokens per trainable parameter. Read it as its own recipe, not as a delta from B."
+    "ADONLY is the one arm that is NOT a one-factor tweak: it changes what is trainable. It exists because modules_to_save makes the embed/head pair 0.636B of the 0.694B trainable parameters (on this stack the pair is tied, so it counts once). Freezing it takes trainable from 0.694B to 58.1M (11.9x), grads + 8-bit optimizer state from ~2.8 GB to ~0.23 GB, checkpoints from ~1.4 GB to ~0.12 GB, and lifts data exposure from 0.066 to 0.785 tokens per trainable parameter. Read it as its own recipe, not as a delta from B."
   ],
 
   "ruler": {

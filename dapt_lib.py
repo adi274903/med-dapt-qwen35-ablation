@@ -692,31 +692,33 @@ def build_model(run, cfg):
     if cand_head:
         print("  lm_head modules     : %s" % cand_head)
     if want_ms:
-        if tying and tied_names:
-            # ensure_weight_tying: lm_head is wired to the embed copy's tensor,
-            # so there is one trainable tensor, not two.
-            assert w_emb is not None and w_emb.requires_grad, (
-                "embed_tokens not trainable -- the frozen original won")
-            assert w_head is w_emb, (
-                "ensure_weight_tying was applied but the embedding and head do"
-                " not share a tensor -- the head would drift from the embedding")
-            print("  embed_tokens/lm_head: ONE trainable tensor, TIE PRESERVED")
+        # THE invariant, whichever tie state we end up in: both wrapped copies
+        # must be the TRAINABLE ones, or the arm silently trains nothing up
+        # there. The frozen original must never win.
+        assert w_emb is not None and w_emb.requires_grad, (
+            "embed_tokens not trainable -- the frozen original won")
+        assert w_head is not None and w_head.requires_grad, (
+            "lm_head not trainable -- the frozen original won")
+        if w_emb is w_head:
+            # What this stack actually does on a tied base, MEASURED: PEFT moves
+            # the tied partner into modules_to_tie (peft#2777) and points it at
+            # the SAME trainable tensor as the embedding's copy -- so the pair
+            # moves as one, at 1x the params, not 2x. That is the state
+            # `ensure_weight_tying` was meant to buy, and it arrives whether or
+            # not we ask for it: the knob is a NO-OP here, not a lever.
+            print("  embed_tokens/lm_head: ONE trainable tensor, TIE PRESERVED%s"
+                  % (" (PEFT modules_to_tie=%s)" % sorted(tied_names)
+                     if tied_names else ""))
+            print("  the pair costs %.3fB params once (not 2x) and cannot drift"
+                  % (w_emb.numel() / 1e9))
+            if not tying:
+                print("  NOTE: lora.ensure_weight_tying is false and the tie was"
+                      " kept anyway -- trust the live trainable count below, not"
+                      " the plan's untied figure.")
         else:
-            # Tied base + modules_to_save: PEFT deep-copies BOTH modules, so the
-            # tie is gone and the *trainable copies* must be the ones we found.
-            assert w_emb is not None and w_emb.requires_grad, (
-                "embed_tokens not trainable -- the frozen original won")
-            assert w_head is not None and w_head.requires_grad, (
-                "lm_head not trainable -- the frozen original won")
-            assert w_emb is not w_head, (
-                "modules_to_save did not untie embed_tokens/lm_head: the head still"
-                " shares the embedding's tensor%s. PEFT is keeping the base tie"
-                " (tie_word_embeddings=True) instead of deep-copying both, so there"
-                " is ONE trainable tensor, not two. Either set"
-                " lora.ensure_weight_tying=true to declare that as the intent, or"
-                " drop lm_head from modules_to_save."
-                % (" (modules_to_tie=%s)" % sorted(tied_names) if tied_names else ""))
-            print("  embed_tokens/lm_head: trainable copies, TIE BROKEN (expected)")
+            # Untied: PEFT deep-copied both, so embed and head are separate
+            # trainable tensors and there are 2x the params up there.
+            print("  embed_tokens/lm_head: separate trainable copies, TIE BROKEN")
 
     else:
         # Adapter-only: nothing up there may be trainable, and the tie must be
@@ -736,9 +738,10 @@ def build_model(run, cfg):
     print("  trainable tensors: %d  (modules_to_save: %d, %.2fB params)"
           % (len(trainable), n_ms, n_par / 1e9))
     if not want_ms:
+        pair = float(model.get_input_embeddings().weight.numel())  # measured, not assumed
         print("  adapter-only: embed/head frozen, so grads + 8-bit optimizer state")
         print("  drop from ~%.2f GB to ~%.2f GB and a checkpoint is adapter-sized"
-              % ((1.271e9 + n_par) * 4 / 1e9, n_par * 4 / 1e9))
+              % ((pair + n_par) * 4 / 1e9, n_par * 4 / 1e9))
         print("  (~%.2f GB)." % (n_par * 2 / 1e9))
     elif tie_kept:
         print("  the head shares the embedding tensor, so the pair moves as one")
