@@ -81,10 +81,11 @@ work as files instead of needing `%pip` magics.
 | `EMB1` | no decoupled embedding LR (embed LR = LR) |
 | `ADONLY` | `modules_to_save=None` — embed/head frozen, adapter only |
 
-1392 steps and 45.6M tokens per arm at 5.0 h/arm; the grid is **30 h of a 45 h
-ceiling** (~261 Colab units), ~3.2 sessions, with the remaining 10 h reserved for
-two seed replicates of `B` (kept out of `grid` on purpose so a default run does
-not spend them).
+1393 steps and 45.6M tokens per arm at 2.99 h/arm — the wall that yields that
+regime at the **measured** 6.8 s/step (A100), not the planned 12.0. The grid is
+**17.9 h of a 45 h ceiling** (~156 Colab units), ~1.9 sessions, and the two seed
+replicates of `B` (kept out of `grid` on purpose so a default run does not spend
+them) add 6 h.
 
 Two model facts drive the design and are asserted in `build_model()`, not assumed:
 
@@ -92,7 +93,7 @@ Two model facts drive the design and are asserted in `build_model()`, not assume
    `embed_tokens` and `lm_head`, and both stay trainable — but **the tie is kept,
    measured, not assumed**: PEFT moves `lm_head` into `modules_to_tie` and points
    it at the embedding's trainable copy, so the pair moves as one 0.636B-param
-   tensor out of 0.694B trainable. `ensure_weight_tying` was exposed as a baseline
+   tensor out of the measured 0.679B trainable. `ensure_weight_tying` was exposed as a baseline
    key to buy exactly that state; since it happens anyway, the key is a **no-op
    here**, and `build_model()` reports the tie state it actually got.
 2. bf16 is mandatory (`qwen3_5` is in Unsloth's `FORCE_FLOAT32`) and QLoRA is
@@ -141,6 +142,6 @@ STUB_PEFT_FORWARD=0 python3 selftest/test_stub_run.py   # older/different PEFT n
 ```
 
 **Before spending units:** run `probe()` (step 08 or `dapt_lib.probe`).
-`budget.sec_per_step` ships as a **placeholder (12.0)** and a wrong value does not
-error — it silently rescales the token budget, which is the one thing this design
-must not do.
+`budget.sec_per_step` is **measured per box** (6.8 on the A100) and a wrong value
+does not error — it silently rescales the token budget, which is the one thing
+this design must not do.

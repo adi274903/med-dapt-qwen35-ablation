@@ -13,7 +13,7 @@
     "in the notebook preamble, and dapt_lib deep-merges it over this file.",
     "See configs/ctx4096.json for a worked example.",
     "",
-    "THE ONE RULE: budget.sec_per_step is a PLACEHOLDER (12.0) until you run probe().",
+    "THE ONE RULE: budget.sec_per_step is MEASURED PER BOX (6.8 on the A100) -- re-run probe() on any other GPU before a grid run.",
     "A wrong s/step does not error -- it silently rescales tokens/arm, which is the",
     "only thing that makes arms comparable.",
     "",
@@ -28,16 +28,16 @@
   "ablation_root": "/content/drive/MyDrive/Med_Qwen3.5_4B/ablation",
 
   "budget": {
-    "wall_h_per_arm": 5.0,
-    "_wall_h_why": "The knob to think in. 1.0 h/arm = 192 steps, and the fixed 0.36 h per-arm overhead is 36% of that clock. 3.0 h = 792 steps / 26.0M tokens. 5.0 h = 1392 steps / 45.6M tokens. 6 arms x 5.0 h = 30 h.",
+    "wall_h_per_arm": 2.99,
+    "_wall_h_why": "The knob to think in, now that sec_per_step is MEASURED at 6.8 (A100): 1.0 h/arm = 340 steps, and the fixed 0.36 h per-arm overhead is still 36% of a 1.0 h clock. 2.99 h = 1393 steps / 45.6M tokens -- the designed data-starved regime, which is why 2.99 is the value set. 3.0 h = 1399 steps / 45.8M. 5.0 h = 2457 steps / 80.5M tokens, if you would rather buy data with the freed wall clock. 6 arms x 2.99 h = 17.9 h.",
     "total_budget_hours": 45.0,
-    "_total_why": "Ceiling for the whole grid: 30 h grid + 10 h for the two B seed reps + 5 h margin. The driver stops before exceeding it.",
+    "_total_why": "Ceiling for the whole grid at the measured 6.8 s/step: 17.9 h grid (6 arms x 2.99 h) + 6.0 h for the two B seed reps + 20 h margin, because the margin IS the confirm stage's budget. The driver stops before exceeding it. Units at 8.71/h: ~24 h of runs = 209 units of the 1000 balance.",
     "session_hours": 9.5,
     "effective_batch": 16,
     "_effective_batch_why": "per_device_train_batch_size 2 x gradient_accumulation_steps 8.",
     "seq_len": 2048,
-    "sec_per_step": 12.0,
-    "_sec_per_step_why": "PLACEHOLDER for the 4B on the RTX 6000 Pro (G4), scaled from the measured 27B number (36.0) by the 4.35B-vs-27B text-param ratio. RUN probe() FIRST. ~12 s/step = 2731 tok/s = 9.83M tok/h.",
+    "sec_per_step": 6.8,
+    "_sec_per_step_why": "MEASURED on Colab A100-SXM4-80GB (step-08 probe: 14 timed steps, first 5 warmup discarded -- the GDN/Mamba Triton kernels compile at load and would poison the mean): 6.8 s/step = 4795 tok/s = 17.26M tok/h at effective batch 16 x len 2048, peak 20.4 GiB of 80. It was a PLACEHOLDER (12.0, scaled from the measured 27B number) before this run. PER BOX: re-run probe() and update this on any other GPU -- a wrong s/step does not error, it silently rescales tokens/arm, which is the only thing that makes arms comparable.",
     "units_per_hour": 8.71,
     "unit_balance": 1000,
     "text_params": 4350000000,
@@ -112,10 +112,10 @@
     "use_dora": true,
     "r": 32,
     "lora_alpha": 64,
-    "_rank_why": "alpha = 2*r keeps the effective scaling alpha/r = 2 identical to the original r=128 config, and r=32 is 1.25% of the base instead of 4.93%. Every arm's adapter is <= 1.25% here; the DoRA paper's own LLaMA-7B setup is 2.31%/2.33%.",
+    "_rank_why": "alpha = 2*r keeps the effective scaling alpha/r = 2 identical to the original r=128 config, and r=32 is 0.83% of the loaded model instead of 4.93%. Every arm's adapter is <= 0.83% here; the DoRA paper's own LLaMA-7B setup is 2.31%/2.33%.",
     "learning_rate": 0.0001,
     "embedding_lr_ratio": 0.1,
-    "_emblr_why": "embedding_learning_rate = learning_rate * this = 1e-5. Decoupled because the embed/head pair is 0.636B of the 0.694B trainable parameters (91.6% of everything that moves) -- and on this stack the pair is TIED, so it counts once, not twice (see _tying_why). ARM EMB1 sets it to 1.0 to test whether the decoupling is needed at all.",
+    "_emblr_why": "embedding_learning_rate = learning_rate * this = 1e-5. Decoupled because the embed/head pair is 0.636B of the measured 0.679B trainable parameters (93.6% of everything that moves) -- and on this stack the pair is TIED, so it counts once, not twice (see _tying_why). ARM EMB1 sets it to 1.0 to test whether the decoupling is needed at all.",
     "lora_dropout": 0.0,
     "max_length": 2048,
     "ensure_weight_tying": false,
@@ -133,7 +133,7 @@
   ],
   "_grid_why": [
     "Cut from 10 arms. Removed: r=128 (4.93% of the base) and r=256 (9.83%) entirely -- both are over the ~1-2% adapter line with a known answer, since rank saturates at 8-32; r=64 (2.47%) for the same reason; LR 3e-5 (redundant direction when 1e-4 -> 3e-4 brackets the ~2e-4 default in one arm); lora_dropout 0.05 (not a lever at this token budget); max_length 4096 (a deployment choice, and for the same tokens it would cost half the steps).",
-    "ADONLY is the one arm that is NOT a one-factor tweak: it changes what is trainable. It exists because modules_to_save makes the embed/head pair 0.636B of the 0.694B trainable parameters (on this stack the pair is tied, so it counts once). Freezing it takes trainable from 0.694B to 58.1M (11.9x), grads + 8-bit optimizer state from ~2.8 GB to ~0.23 GB, checkpoints from ~1.4 GB to ~0.12 GB, and lifts data exposure from 0.066 to 0.785 tokens per trainable parameter. Read it as its own recipe, not as a delta from B."
+    "ADONLY is the one arm that is NOT a one-factor tweak: it changes what is trainable. It exists because modules_to_save makes the embed/head pair 0.636B of the measured 0.679B trainable parameters (on this stack the pair is tied, so it counts once). Freezing it takes trainable from 0.679B to the adapter's own 43.2M (15.7x), grads + 8-bit optimizer state from ~2.7 GB to ~0.17 GB, checkpoints from ~1.4 GB to ~0.09 GB, and lifts data exposure from 0.067 to 1.06 tokens per trainable parameter. Read it as its own recipe, not as a delta from B."
   ],
 
   "ruler": {

@@ -27,7 +27,7 @@
     "4096 context is a DEPLOYMENT choice, not an ablation: it answers 'does the",
     "arm ranking survive at the context I will actually serve at?'",
     "B4k sees the same 45.6M tokens as B (tokens/arm is held constant), so it",
-    "gets half the steps: 696 instead of 1392. Its wall-clock estimate is",
+    "gets half the steps: 697 instead of 1393. Its wall-clock estimate is",
     "OPTIMISTIC -- sec_per_step was measured at 2048, and per-step cost scales",
     "roughly with sequence length. If B4k matters, re-probe at 4096 and set",
     "sec_per_step from that measurement before trusting its hours.",
